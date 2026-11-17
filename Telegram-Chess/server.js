@@ -36,7 +36,7 @@ function verify(init){if(!init)return null;const p=new URLSearchParams(init),h=p
 
 /* ---------- http + ws ---------- */
 const server=http.createServer((req,res)=>{
- if(req.url==='/health'){res.writeHead(200);res.end('ok');return}
+ if(req.url==='/health'){res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:true,bot:BOT_USER||null,polling:DBG.polling,app_link:APP_LINK||null,inline_queries_received:DBG.inline,inline_answered_ok:DBG.answered,last_inline_query:DBG.last,last_error:DBG.err,database:!!pool},null,1));return}
  if(req.url.split('?')[0]==='/')fs.readFile(path.join(__dirname,'index.html'),(e,d)=>{res.writeHead(e?500:200,{'Content-Type':'text/html; charset=utf-8'});res.end(e?'error':d)});
  else{res.writeHead(404);res.end()}});
 const wss=new WebSocketServer({server,maxPayload:2048});
@@ -78,10 +78,11 @@ setInterval(match,1000);
 
 /* ---------- Telegram bot: inline invites (@bot in any chat/group) + friendly rooms ---------- */
 const APP_LINK=(process.env.APP_LINK||'').replace(/\/$/,'');   /* e.g. https://t.me/mychessbot/play  (the Mini App direct link) */
+const DBG={inline:0,answered:0,last:null,err:null,polling:false};
 let BOT_USER='';const rooms=new Map(),sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const tgcall=(m,b)=>fetch(`https://api.telegram.org/bot${TOKEN}/${m}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());
-const PRESETS=[[1,0],[3,0],[3,2],[5,0],[10,0],[15,10]];
+const PRESETS=[[5,0],[3,0],[3,2],[1,0],[10,0],[15,10]];
 function inlineQuery(q){const list=PRESETS.slice(),mm=/^\s*(\d{1,3})\s*\+\s*(\d{1,2})\s*$/.exec(q.query||'');
  if(mm&&+mm[1]>=1&&+mm[1]<=180&&+mm[2]<=60)list.unshift([+mm[1],+mm[2]]);   /* "@bot 7+5" = custom time */
  const nm=esc(q.from.first_name||'Player'),seen=new Set();
@@ -90,7 +91,8 @@ function inlineQuery(q){const list=PRESETS.slice(),mm=/^\s*(\d{1,3})\s*\+\s*(\d{
   return{type:'article',id,title:`♟ Chess ${m}+${i} · ${c}`,description:'Challenge this chat to a game',
    input_message_content:{message_text:`♟ <b>Chess challenge</b> · ${m}+${i} ${c}\n${nm} wants to play. Tap <b>Play</b> – the first person to join gets the game!`,parse_mode:'HTML'},
    reply_markup:{inline_keyboard:[[{text:'♟ Play',url:`${APP_LINK}?startapp=${id}`}]]}}});
- tgcall('answerInlineQuery',{inline_query_id:q.id,results,cache_time:0,is_personal:true}).catch(()=>{})}
+ tgcall('answerInlineQuery',{inline_query_id:q.id,results,cache_time:0,is_personal:true})
+  .then(r=>{if(r.ok)DBG.answered++;else{DBG.err='answerInlineQuery: '+r.description;console.log(DBG.err)}}).catch(e=>{DBG.err='answerInlineQuery: '+e.message;console.log(DBG.err)})}
 function getRoom(id){const mm=/^m(\d{1,3})i(\d{1,2})_[a-f0-9]{8}$/.exec(id);if(!mm)return null;const m=+mm[1],i=+mm[2];if(m<1||m>180||i>60)return null;
  let r=rooms.get(id);if(!r){r={id,m,i,host:null,used:false,t:Date.now(),inline:null};rooms.set(id,r)}return r}
 function joinRoom(uid,id){const cur=inGame.get(uid);if(cur&&!cur.over)return sendStart(cur,uid);
@@ -103,13 +105,13 @@ function joinRoom(uid,id){const cur=inGame.get(uid);if(cur&&!cur.over)return sen
  else{r.host=uid;send(uid,{t:'waiting',m:r.m,i:r.i})}}
 setInterval(()=>{for(const[k,r]of rooms)if(Date.now()-r.t>2*3600e3)rooms.delete(k)},600000);
 async function poll(){if(!TOKEN)return console.log('No BOT_TOKEN: Telegram invites disabled');
- const me=await tgcall('getMe');BOT_USER=me.result?me.result.username:'';
+ const me=await tgcall('getMe');if(!me.ok){DBG.err='getMe: '+me.description+' (BOT_TOKEN wrong?)';console.log(DBG.err);return}BOT_USER=me.result.username;DBG.polling=true;
  console.log('Bot @'+BOT_USER+(APP_LINK?'':'  -> set APP_LINK (https://t.me/<bot>/<app>) to enable invites'));
  await tgcall('deleteWebhook').catch(()=>{});let off=0;
  for(;;){try{const r=await tgcall('getUpdates',{offset:off,timeout:30,allowed_updates:['inline_query','chosen_inline_result']});
-  if(!r.ok){await sleep(3000);continue}
+  if(!r.ok){DBG.err='getUpdates: '+r.description;console.log(DBG.err);await sleep(3000);continue}
   for(const u of r.result){off=u.update_id+1;
-   if(u.inline_query&&APP_LINK)inlineQuery(u.inline_query);
+   if(u.inline_query){DBG.inline++;DBG.last=new Date().toISOString();if(APP_LINK)inlineQuery(u.inline_query);else{DBG.err='APP_LINK is not set on the server';console.log(DBG.err)}}
    if(u.chosen_inline_result){const r2=getRoom(u.chosen_inline_result.result_id);if(r2&&u.chosen_inline_result.inline_message_id)r2.inline=u.chosen_inline_result.inline_message_id}}}
   catch(e){await sleep(3000)}}}
 poll();
