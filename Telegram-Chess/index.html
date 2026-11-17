@@ -238,27 +238,30 @@ $('#hm').onclick=()=>{if(G&&G.online&&!G.over&&G.plies<2)send({t:'resign'});if(G
 
 /* ===== Online multiplayer ===== */
 const SERVER='';   /* e.g. 'wss://chess.example.com' if the server is on a different domain than this page */
-let ws=null,S=null,qT=null,wsq=[],BOT='',sp=tg&&tg.initDataUnsafe&&tg.initDataUnsafe.start_param;
+let ws=null,S=null,qT=null,wsq=[],BOT='',APPL='',curRoom=null,sp=tg&&tg.initDataUnsafe&&tg.initDataUnsafe.start_param;
 const WSURL=SERVER||((location.protocol=='https:'?'wss://':'ws://')+location.host);
 function send(o){const s=JSON.stringify(o);if(ws&&ws.readyState==1)ws.send(s);else wsq.push(s)}
 function conn(){try{ws=new WebSocket(WSURL)}catch(e){return}
  ws.onopen=()=>{ws.send(JSON.stringify({t:'auth',initData:tg?tg.initData:'',name:uname}));if(sp){ws.send(JSON.stringify({t:'join',room:sp}));sp=null}wsq.splice(0).forEach(x=>ws.send(x))};
  ws.onmessage=e=>on(JSON.parse(e.data));ws.onclose=()=>setTimeout(conn,2000)}
-function invite(){const q=cfg.m+'+'+cfg.i;
- try{tg.switchInlineQuery(q,['users','groups','channels'])}
- catch(e){modal(`<h2>👥 Invite</h2><div style="color:var(--mu);line-height:1.7">Open any chat or group and type<br><b style="color:var(--tx)">@${BOT||'yourbot'} ${q}</b><br>then pick the game.</div><div class="grid"><button class="chip" id="cl">OK</button></div>`);$('#cl').onclick=()=>$('#md').hidden=true}}
+function invite(){const b=new Uint8Array(4);crypto.getRandomValues(b);
+ curRoom='m'+cfg.m+'i'+cfg.i+'_'+[...b].map(x=>x.toString(16).padStart(2,'0')).join('');
+ send({t:'join',room:curRoom});setTimeout(shareRoom,400)}
+function shareRoom(){if(!curRoom)return;const link=(APPL||(BOT?'https://t.me/'+BOT:''))+'?startapp='+curRoom,
+ u='https://t.me/share/url?url='+encodeURIComponent(link)+'&text='+encodeURIComponent('♟ Chess challenge '+cfg.m+'+'+cfg.i+' - tap the link to play!');
+ try{tg.openTelegramLink(u)}catch(e){try{navigator.clipboard.writeText(link)}catch(x){}prompt('Copy this link and send it to your friend / group:',link)}}
 function modal(h){$('#md').hidden=false;$('#md').innerHTML='<div>'+h+'</div>'}
 function queue(){send({t:'queue',m:cfg.m,i:cfg.i});
  modal(`<h2>🔎 Searching…</h2><div style="color:var(--mu)">${cfg.m}+${cfg.i} · ${cap1(cat(cfg.m,cfg.i))}</div><div style="margin:14px 0;color:var(--mu)">Finding an opponent near your rating</div><div class="grid"><button class="chip" id="qc">Cancel</button><button class="chip" id="qb" hidden>Play bot instead</button></div>`);
  $('#qc').onclick=()=>{send({t:'cancel'});clearTimeout(qT);$('#md').hidden=true};
  clearTimeout(qT);qT=setTimeout(()=>{const b=$('#qb');if(b){b.hidden=false;b.onclick=()=>{send({t:'cancel'});$('#md').hidden=true;newGame()}}},15000)}
 function on(m){
- if(m.t=='me'){S=m.r;BOT=m.bot;if(!G)home()}
+ if(m.t=='me'){S=m.r;BOT=m.bot;APPL=m.app;if(!G)home()}
  else if(m.t=='start'){clearTimeout(qT);startOnline(m)}
  else if(m.t=='move'&&G&&G.online&&!G.over){const x=legal(G.pos).find(v=>v.f==m.f&&v.t==m.to&&(v.p||'')==(m.p||''));if(x){G.clk=m.clk;play(x,1)}}
  else if(m.t=='ack'&&G&&G.online){G.clk=m.clk;G.ts=performance.now()}
  else if(m.t=='waiting'){modal(`<h2>⏳ Waiting…</h2><div style="color:var(--mu)">${m.m}+${m.i} · Friendly game</div><div style="margin:14px 0;color:var(--mu)">Share this game in a chat. The first person to tap Play joins you.</div><div class="grid"><button class="chip" id="sh">👥 Share</button><button class="chip" id="wc">Cancel</button></div>`);
-  $('#sh').onclick=()=>{cfg.m=m.m;cfg.i=m.i;invite()};$('#wc').onclick=()=>{send({t:'cancel'});$('#md').hidden=true}}
+  curRoom=m.room;cfg.m=m.m;cfg.i=m.i;$('#sh').onclick=shareRoom;$('#wc').onclick=()=>{send({t:'cancel'});curRoom=null;$('#md').hidden=true}}
  else if(m.t=='over')overOnline(m)
  else if(m.t=='lb'){const f=(k,n)=>`<div style="text-align:left;margin-top:10px"><b>${n}</b>${m[k].map((x,i)=>`<div style="display:flex;justify-content:space-between;color:var(--mu)"><span>${i+1}. ${x.name}</span><b style="color:var(--tx)">${x.r}</b></div>`).join('')||'<div style="color:var(--mu)">No players yet</div>'}</div>`;
   modal(`<h2>🏆 Top players</h2>${f('bullet','⚡ Bullet')}${f('blitz','🔥 Blitz')}${f('rapid','⏱ Rapid')}<div class="grid"><button class="chip" id="cl">Close</button></div>`);$('#cl').onclick=()=>$('#md').hidden=true}
