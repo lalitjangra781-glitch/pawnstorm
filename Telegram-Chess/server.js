@@ -36,6 +36,7 @@ function verify(init){if(!init)return null;const p=new URLSearchParams(init),h=p
 
 /* ---------- http + ws ---------- */
 const server=http.createServer((req,res)=>{
+ if(req.url.split('?')[0]==='/thumb.png'){fs.readFile(path.join(__dirname,'thumb.png'),(e,d)=>{res.writeHead(e?404:200,{'Content-Type':'image/png','Cache-Control':'public,max-age=86400'});res.end(e?'':d)});return}
  if(req.url==='/health'){res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:true,bot:BOT_USER||null,polling:DBG.polling,app_link:APP_LINK||null,inline_queries_received:DBG.inline,inline_answered_ok:DBG.answered,last_inline_query:DBG.last,last_error:DBG.err,database:!!pool},null,1));return}
  if(req.url.split('?')[0]==='/')fs.readFile(path.join(__dirname,'index.html'),(e,d)=>{res.writeHead(e?500:200,{'Content-Type':'text/html; charset=utf-8'});res.end(e?'error':d)});
  else{res.writeHead(404);res.end()}});
@@ -78,19 +79,22 @@ setInterval(match,1000);
 
 /* ---------- Telegram bot: inline invites (@bot in any chat/group) + friendly rooms ---------- */
 const APP_LINK=(process.env.APP_LINK||'').replace(/\/$/,'');   /* e.g. https://t.me/mychessbot/play  (the Mini App direct link) */
+const PUBLIC_URL=(process.env.PUBLIC_URL||process.env.RENDER_EXTERNAL_URL||'').replace(/\/$/,''),GAME_NAME=process.env.GAME_NAME||'Pawn Storm Chess';
 const DBG={inline:0,answered:0,last:null,err:null,polling:false};
 let BOT_USER='';const rooms=new Map(),sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const tgcall=(m,b)=>fetch(`https://api.telegram.org/bot${TOKEN}/${m}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());
+const cap=x=>x[0].toUpperCase()+x.slice(1);
 const PRESETS=[[5,0],[3,0],[3,2],[1,0],[10,0],[15,10]];
 function inlineQuery(q){const list=PRESETS.slice(),mm=/^\s*(\d{1,3})\s*\+\s*(\d{1,2})\s*$/.exec(q.query||'');
  if(mm&&+mm[1]>=1&&+mm[1]<=180&&+mm[2]<=60)list.unshift([+mm[1],+mm[2]]);   /* "@bot 7+5" = custom time */
  const nm=esc(q.from.first_name||'Player'),seen=new Set();
- const results=list.filter(([m,i])=>!seen.has(m+'+'+i)&&seen.add(m+'+'+i)).map(([m,i])=>{
+ const results=list.filter(([m,i])=>!seen.has(m+'+'+i)&&seen.add(m+'+'+i)).map(([m,i],ix)=>{
   const id=`m${m}i${i}_${crypto.randomBytes(4).toString('hex')}`,c=cat(m,i);
-  return{type:'article',id,title:`♟ Chess ${m}+${i} · ${c}`,description:'Challenge this chat to a game',
-   input_message_content:{message_text:`♟ <b>Chess challenge</b> · ${m}+${i} ${c}\n${nm} wants to play. Tap <b>Play</b> – the first person to join gets the game!`,parse_mode:'HTML'},
-   reply_markup:{inline_keyboard:[[{text:'♟ Play',url:`${APP_LINK}?startapp=${id}`}]]}}});
+  return{type:'article',id,title:ix==0?GAME_NAME:`${GAME_NAME} · ${m}+${i}`,description:ix==0?`Play chess with your friends · ${m}+${i} ${cap(c)}`:`${cap(c)} game · play chess with your friends`,
+   thumbnail_url:PUBLIC_URL?PUBLIC_URL+'/thumb.png':undefined,thumbnail_width:320,thumbnail_height:320,
+   input_message_content:{message_text:`♟ <b>${esc(GAME_NAME)}</b>\n${nm} challenges you to a chess game · ${m}+${i} ${cap(c)}\nTap <b>Play</b> – the first person to join gets the game!`,parse_mode:'HTML'},
+   reply_markup:{inline_keyboard:[[{text:'♟ Play Chess',url:`${APP_LINK}?startapp=${id}`}]]}}});
  tgcall('answerInlineQuery',{inline_query_id:q.id,results,cache_time:0,is_personal:true})
   .then(r=>{if(r.ok)DBG.answered++;else{DBG.err='answerInlineQuery: '+r.description;console.log(DBG.err)}}).catch(e=>{DBG.err='answerInlineQuery: '+e.message;console.log(DBG.err)})}
 function getRoom(id){const mm=/^m(\d{1,3})i(\d{1,2})_[a-f0-9]{8}$/.exec(id);if(!mm)return null;const m=+mm[1],i=+mm[2];if(m<1||m>180||i>60)return null;
