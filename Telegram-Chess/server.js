@@ -36,8 +36,11 @@ function verify(init){if(!init)return null;const p=new URLSearchParams(init),h=p
 
 /* ---------- http + ws ---------- */
 const server=http.createServer((req,res)=>{
+ if(req.method==='POST'&&req.url==='/tg'){if(req.headers['x-telegram-bot-api-secret-token']!==SECRET){res.writeHead(403);res.end();return}
+  let b='';req.on('data',d=>{b+=d;if(b.length>1e5)req.destroy()});
+  req.on('end',()=>{res.writeHead(200);res.end('ok');try{handleUpdate(JSON.parse(b))}catch(e){DBG.err='update: '+e.message}});return}
  if(req.url.split('?')[0]==='/thumb.png'){fs.readFile(path.join(__dirname,'thumb.png'),(e,d)=>{res.writeHead(e?404:200,{'Content-Type':'image/png','Cache-Control':'public,max-age=86400'});res.end(e?'':d)});return}
- if(req.url==='/health'){res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:true,bot:BOT_USER||null,polling:DBG.polling,app_link:APP_LINK||null,inline_queries_received:DBG.inline,inline_answered_ok:DBG.answered,last_inline_query:DBG.last,last_error:DBG.err,database:!!pool},null,1));return}
+ if(req.url==='/health'){res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:true,bot:BOT_USER||null,mode:DBG.mode,polling:DBG.polling,app_link:APP_LINK||null,inline_queries_received:DBG.inline,inline_answered_ok:DBG.answered,last_inline_query:DBG.last,last_error:DBG.err,database:!!pool},null,1));return}
  if(req.url.split('?')[0]==='/')fs.readFile(path.join(__dirname,'index.html'),(e,d)=>{res.writeHead(e?500:200,{'Content-Type':'text/html; charset=utf-8'});res.end(e?'error':d)});
  else{res.writeHead(404);res.end()}});
 const wss=new WebSocketServer({server,maxPayload:2048});
@@ -80,7 +83,7 @@ setInterval(match,1000);
 /* ---------- Telegram bot: inline invites (@bot in any chat/group) + friendly rooms ---------- */
 const APP_LINK=(process.env.APP_LINK||'').replace(/\/$/,'');   /* e.g. https://t.me/mychessbot/play  (the Mini App direct link) */
 const PUBLIC_URL=(process.env.PUBLIC_URL||process.env.RENDER_EXTERNAL_URL||'').replace(/\/$/,''),GAME_NAME=process.env.GAME_NAME||'Pawn Storm Chess';
-const DBG={inline:0,answered:0,last:null,err:null,polling:false};
+const DBG={mode:null,inline:0,answered:0,last:null,err:null,polling:false};
 let BOT_USER='';const rooms=new Map(),sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const tgcall=(m,b)=>fetch(`https://api.telegram.org/bot${TOKEN}/${m}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());
@@ -108,17 +111,35 @@ function joinRoom(uid,id){const cur=inGame.get(uid);if(cur&&!cur.over)return sen
   if(r.inline)tgcall('editMessageText',{inline_message_id:r.inline,parse_mode:'HTML',text:`♟ <b>${esc(users[h].name)}</b> vs <b>${esc(users[uid].name)}</b> · ${r.m}+${r.i}\nGame in progress…`}).catch(()=>{})}
  else{r.host=uid;send(uid,{t:'waiting',m:r.m,i:r.i,room:r.id})}}
 setInterval(()=>{for(const[k,r]of rooms)if(Date.now()-r.t>2*3600e3)rooms.delete(k)},600000);
-async function poll(){if(!TOKEN)return console.log('No BOT_TOKEN: Telegram invites disabled');
- const me=await tgcall('getMe');if(!me.ok){DBG.err='getMe: '+me.description+' (BOT_TOKEN wrong?)';console.log(DBG.err);return}BOT_USER=me.result.username;DBG.polling=true;
- console.log('Bot @'+BOT_USER+(APP_LINK?'':'  -> set APP_LINK (https://t.me/<bot>/<app>) to enable invites'));
- await tgcall('deleteWebhook').catch(()=>{});let off=0;
- for(;;){try{const r=await tgcall('getUpdates',{offset:off,timeout:30,allowed_updates:['inline_query','chosen_inline_result']});
+const SECRET=crypto.createHash('sha256').update(TOKEN||'x').digest('hex').slice(0,32);
+const ALLOWED=['inline_query','chosen_inline_result','message'];
+const newRoom=(m,i)=>`m${m}i${i}_${crypto.randomBytes(4).toString('hex')}`;
+function sendMsg(chat,text,markup){return tgcall('sendMessage',{chat_id:chat,text,parse_mode:'HTML',reply_markup:markup,disable_web_page_preview:true})
+ .then(r=>{if(!r.ok){DBG.err='sendMessage: '+r.description;console.log(DBG.err)}}).catch(e=>{DBG.err='sendMessage: '+e.message})}
+function onMessage(m){const t=(m.text||'').trim();if(t[0]!=='/')return;
+ const parts=t.split(/\s+/),cmd=parts[0].split('@')[0].toLowerCase(),priv=m.chat.type==='private';
+ if(cmd==='/status')return sendMsg(m.chat.id,`mode: ${DBG.mode}\napp_link: ${APP_LINK||'NOT SET'}\npublic_url: ${PUBLIC_URL||'NOT SET'}\ndatabase: ${pool?'yes':'no'}\ninline queries: ${DBG.inline} (answered ${DBG.answered})\nlast error: ${DBG.err||'none'}`);
+ if(cmd==='/chess'||cmd==='/play'||(cmd==='/start'&&!priv)){
+  let m1=5,i1=0;const mm=/^(\d{1,3})\+(\d{1,2})$/.exec(parts[1]||'');if(mm&&+mm[1]>=1&&+mm[1]<=180&&+mm[2]<=60){m1=+mm[1];i1=+mm[2]}
+  if(!APP_LINK)return sendMsg(m.chat.id,'⚠️ APP_LINK is not set on the server.');
+  const id=newRoom(m1,i1),c=cat(m1,i1),nm=esc((m.from&&m.from.first_name)||'Player');
+  return sendMsg(m.chat.id,`♟ <b>${esc(GAME_NAME)}</b>\n${nm} challenges you to a chess game · ${m1}+${i1} ${cap(c)}\nTap <b>Play</b> – the first person to join gets the game!`,{inline_keyboard:[[{text:'♟ Play Chess',url:`${APP_LINK}?startapp=${id}`}]]})}
+ if(cmd==='/start')return sendMsg(m.chat.id,`♟ <b>${esc(GAME_NAME)}</b>\nPlay online with ratings, or challenge friends: type <b>@${BOT_USER}</b> in any chat, or send /chess in a group.`,PUBLIC_URL?{inline_keyboard:[[{text:'♟ Play Chess',web_app:{url:PUBLIC_URL}}]]}:undefined)}
+function handleUpdate(u){
+ if(u.inline_query){DBG.inline++;DBG.last=new Date().toISOString();
+  if(APP_LINK)inlineQuery(u.inline_query);else{DBG.err='APP_LINK is not set on the server';console.log(DBG.err)}}
+ if(u.chosen_inline_result){const r2=getRoom(u.chosen_inline_result.result_id);if(r2&&u.chosen_inline_result.inline_message_id)r2.inline=u.chosen_inline_result.inline_message_id}
+ if(u.message)onMessage(u.message)}
+async function startBot(){if(!TOKEN)return console.log('No BOT_TOKEN: Telegram bot disabled');
+ const me=await tgcall('getMe');if(!me.ok){DBG.err='getMe: '+me.description+' (BOT_TOKEN wrong?)';console.log(DBG.err);return}
+ BOT_USER=me.result.username;console.log('Bot @'+BOT_USER+(APP_LINK?'':'  -> set APP_LINK (https://t.me/<bot>/<app>) to enable invites'));
+ tgcall('setMyCommands',{commands:[{command:'chess',description:'Challenge this chat to a chess game'},{command:'status',description:'Check server status'}]}).catch(()=>{});
+ if(PUBLIC_URL){const r=await tgcall('setWebhook',{url:PUBLIC_URL+'/tg',secret_token:SECRET,allowed_updates:ALLOWED,drop_pending_updates:true});
+  DBG.mode='webhook';DBG.polling=!!r.ok;if(r.ok)console.log('Webhook set: '+PUBLIC_URL+'/tg');else{DBG.err='setWebhook: '+r.description;console.log(DBG.err)}return}
+ DBG.mode='polling';DBG.polling=true;await tgcall('deleteWebhook').catch(()=>{});let off=0;
+ for(;;){try{const r=await tgcall('getUpdates',{offset:off,timeout:30,allowed_updates:ALLOWED});
   if(!r.ok){DBG.err='getUpdates: '+r.description;console.log(DBG.err);await sleep(3000);continue}
-  for(const u of r.result){off=u.update_id+1;
-   if(u.inline_query){DBG.inline++;DBG.last=new Date().toISOString();if(APP_LINK)inlineQuery(u.inline_query);else{DBG.err='APP_LINK is not set on the server';console.log(DBG.err)}}
-   if(u.chosen_inline_result){const r2=getRoom(u.chosen_inline_result.result_id);if(r2&&u.chosen_inline_result.inline_message_id)r2.inline=u.chosen_inline_result.inline_message_id}}}
-  catch(e){await sleep(3000)}}}
-poll();
+  for(const u of r.result){off=u.update_id+1;handleUpdate(u)}}catch(e){await sleep(3000)}}}
 
 /* ---------- games ---------- */
 function startGame(a,b,fr){const[w,k]=Math.random()<.5?[a,b]:[b,a],ms=a.m*60000;
@@ -159,4 +180,4 @@ function end(g,res,why){if(g.over)return;
 
 function lb(){const o={};for(const c of['bullet','blitz','rapid'])o[c]=Object.values(users).filter(u=>u.w+u.l+u.d>0).sort((a,b)=>b[c]-a[c]).slice(0,10).map(u=>({name:u.name,r:u[c]}));return o}
 
-loadDB().then(()=>server.listen(PORT,()=>console.log('Chess server on :'+PORT+(DEV?' (DEV mode)':'')))).catch(e=>{console.log('Startup failed:',e.message);process.exit(1)});
+loadDB().then(()=>{server.listen(PORT,()=>console.log('Chess server on :'+PORT+(DEV?' (DEV mode)':'')));startBot()}).catch(e=>{console.log('Startup failed:',e.message);process.exit(1)});
