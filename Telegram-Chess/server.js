@@ -50,7 +50,7 @@ wss.on('connection',ws=>{
    if(!u){ws.send(JSON.stringify({t:'err',msg:'auth failed'}));return ws.close()}
    const uid=String(u.id),old=conns.get(uid);if(old&&old!==ws){old.uid=null;old.close()}
    ws.uid=uid;conns.set(uid,ws);const r=rec(uid);r.name=((u.first_name||'')+(u.last_name?' '+u.last_name:'')).slice(0,30)||'Player';touch(uid);
-   send(uid,{t:'me',r:pub(r),bot:BOT_USER});
+   send(uid,{t:'me',r:pub(r),bot:BOT_USER,app:APP_LINK});
    const g=inGame.get(uid);if(g&&!g.over){clearTimeout(g.dc[g.pl.w===uid?'w':'b']);sendStart(g,uid)}
    return}
   const uid=ws.uid;if(!uid)return;
@@ -102,7 +102,7 @@ function joinRoom(uid,id){const cur=inGame.get(uid);if(cur&&!cur.over)return sen
  if(r.host&&r.host!==uid&&conns.has(r.host)){r.used=true;const h=r.host;
   startGame({uid:h,m:r.m,i:r.i},{uid,m:r.m,i:r.i},true);
   if(r.inline)tgcall('editMessageText',{inline_message_id:r.inline,parse_mode:'HTML',text:`♟ <b>${esc(users[h].name)}</b> vs <b>${esc(users[uid].name)}</b> · ${r.m}+${r.i}\nGame in progress…`}).catch(()=>{})}
- else{r.host=uid;send(uid,{t:'waiting',m:r.m,i:r.i})}}
+ else{r.host=uid;send(uid,{t:'waiting',m:r.m,i:r.i,room:r.id})}}
 setInterval(()=>{for(const[k,r]of rooms)if(Date.now()-r.t>2*3600e3)rooms.delete(k)},600000);
 async function poll(){if(!TOKEN)return console.log('No BOT_TOKEN: Telegram invites disabled');
  const me=await tgcall('getMe');if(!me.ok){DBG.err='getMe: '+me.description+' (BOT_TOKEN wrong?)';console.log(DBG.err);return}BOT_USER=me.result.username;DBG.polling=true;
