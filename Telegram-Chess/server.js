@@ -40,8 +40,8 @@ const server=http.createServer((req,res)=>{
   let b='';req.on('data',d=>{b+=d;if(b.length>1e5)req.destroy()});
   req.on('end',()=>{res.writeHead(200);res.end('ok');try{handleUpdate(JSON.parse(b))}catch(e){DBG.err='update: '+e.message}});return}
  if(req.url.split('?')[0]==='/thumb.png'){fs.readFile(path.join(__dirname,'thumb.png'),(e,d)=>{res.writeHead(e?404:200,{'Content-Type':'image/png','Cache-Control':'public,max-age=86400'});res.end(e?'':d)});return}
- if(req.url==='/health'){res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:true,bot:BOT_USER||null,mode:DBG.mode,polling:DBG.polling,app_link:APP_LINK||null,inline_queries_received:DBG.inline,inline_answered_ok:DBG.answered,last_inline_query:DBG.last,last_error:DBG.err,database:!!pool},null,1));return}
- if(req.url.split('?')[0]==='/')fs.readFile(path.join(__dirname,'index.html'),(e,d)=>{res.writeHead(e?500:200,{'Content-Type':'text/html; charset=utf-8'});res.end(e?'error':d)});
+ if(req.url==='/health'){res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:true,bot:BOT_USER||null,mode:DBG.mode,polling:DBG.polling,app_link:APP_LINK||null,inline_queries_received:DBG.inline,inline_answered_ok:DBG.answered,last_inline_query:DBG.last,last_error:DBG.err,database:!!pool,online:conns.size,queue:queue.length,last_join:DBG.j||null},null,1));return}
+ if(req.url.split('?')[0]==='/')fs.readFile(path.join(__dirname,'index.html'),(e,d)=>{res.writeHead(e?500:200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});res.end(e?'error':d)});
  else{res.writeHead(404);res.end()}});
 const wss=new WebSocketServer({server,maxPayload:2048});
 const conns=new Map(),inGame=new Map();let queue=[];
@@ -60,7 +60,7 @@ wss.on('connection',ws=>{
   const uid=ws.uid;if(!uid)return;
   if(m.t==='queue')joinQueue(uid,+m.m,+m.i);
   else if(m.t==='cancel'){queue=queue.filter(q=>q.uid!==uid);for(const r of rooms.values())if(r.host===uid&&!r.used)r.host=null}
-  else if(m.t==='join')joinRoom(uid,String(m.room||''));
+  else if(m.t==='join')joinRoom(uid,String(m.room||''),m.re);
   else if(m.t==='move')onMove(uid,m);
   else if(m.t==='resign'){const g=inGame.get(uid);if(g)end(g,g.pl.w===uid?'b':'w','Resigned')}
   else if(m.t==='lb')send(uid,Object.assign({t:'lb'},lb()))});
@@ -102,14 +102,14 @@ function inlineQuery(q){const list=PRESETS.slice(),mm=/^\s*(\d{1,3})\s*\+\s*(\d{
   .then(r=>{if(r.ok)DBG.answered++;else{DBG.err='answerInlineQuery: '+r.description;console.log(DBG.err)}}).catch(e=>{DBG.err='answerInlineQuery: '+e.message;console.log(DBG.err)})}
 function getRoom(id){const mm=/^m(\d{1,3})i(\d{1,2})_[a-f0-9]{8}$/.exec(id);if(!mm)return null;const m=+mm[1],i=+mm[2];if(m<1||m>180||i>60)return null;
  let r=rooms.get(id);if(!r){r={id,m,i,host:null,used:false,t:Date.now(),inline:null};rooms.set(id,r)}return r}
-function joinRoom(uid,id){const cur=inGame.get(uid);if(cur&&!cur.over)return sendStart(cur,uid);
- const r=getRoom(id);if(!r)return send(uid,{t:'err',msg:'Invalid invite link'});
- if(r.used)return send(uid,{t:'err',msg:'This game is already full'});
+function joinRoom(uid,id,re){const J=x=>{DBG.j=new Date().toISOString().slice(11,19)+' '+uid.slice(-4)+' '+id.slice(0,9)+' '+x};const cur=inGame.get(uid);if(cur&&!cur.over){J('resume');return sendStart(cur,uid)}
+ const r=getRoom(id);if(!r){J('invalid');return send(uid,{t:'err',msg:'Invalid invite link'})}
+ if(r.used){J('full');return re?0:send(uid,{t:'err',msg:'This game is already full'})}
  queue=queue.filter(q=>q.uid!==uid);
- if(r.host&&r.host!==uid&&conns.has(r.host)){r.used=true;const h=r.host;
+ if(r.host&&r.host!==uid&&conns.has(r.host)){r.used=true;const h=r.host;J('started vs '+h.slice(-4));
   startGame({uid:h,m:r.m,i:r.i},{uid,m:r.m,i:r.i},true);
   if(r.inline)tgcall('editMessageText',{inline_message_id:r.inline,parse_mode:'HTML',text:`♟ <b>${esc(users[h].name)}</b> vs <b>${esc(users[uid].name)}</b> · ${r.m}+${r.i}\nGame in progress…`}).catch(()=>{})}
- else{r.host=uid;send(uid,{t:'waiting',m:r.m,i:r.i,room:r.id})}}
+ else{r.host=uid;J('waiting');send(uid,{t:'waiting',m:r.m,i:r.i,room:r.id})}}
 setInterval(()=>{for(const[k,r]of rooms)if(Date.now()-r.t>2*3600e3)rooms.delete(k)},600000);
 const SECRET=crypto.createHash('sha256').update(TOKEN||'x').digest('hex').slice(0,32);
 const ALLOWED=['inline_query','chosen_inline_result','message'];
@@ -118,7 +118,7 @@ function sendMsg(chat,text,markup){return tgcall('sendMessage',{chat_id:chat,tex
  .then(r=>{if(!r.ok){DBG.err='sendMessage: '+r.description;console.log(DBG.err)}}).catch(e=>{DBG.err='sendMessage: '+e.message})}
 function onMessage(m){const t=(m.text||'').trim();if(t[0]!=='/')return;
  const parts=t.split(/\s+/),cmd=parts[0].split('@')[0].toLowerCase(),priv=m.chat.type==='private';
- if(cmd==='/status')return sendMsg(m.chat.id,`mode: ${DBG.mode}\napp_link: ${APP_LINK||'NOT SET'}\npublic_url: ${PUBLIC_URL||'NOT SET'}\ndatabase: ${pool?'yes':'no'}\ninline queries: ${DBG.inline} (answered ${DBG.answered})\nlast error: ${DBG.err||'none'}`);
+ if(cmd==='/status')return sendMsg(m.chat.id,`mode: ${DBG.mode}\napp_link: ${APP_LINK||'NOT SET'}\npublic_url: ${PUBLIC_URL||'NOT SET'}\ndatabase: ${pool?'yes':'no'}\ninline queries: ${DBG.inline} (answered ${DBG.answered})\nonline now: ${conns.size}\nin queue: ${queue.length}\nlast join: ${DBG.j||'none'}\nlast error: ${DBG.err||'none'}`);
  if(cmd==='/chess'||cmd==='/play'||(cmd==='/start'&&!priv)){
   let m1=5,i1=0;const mm=/^(\d{1,3})\+(\d{1,2})$/.exec(parts[1]||'');if(mm&&+mm[1]>=1&&+mm[1]<=180&&+mm[2]<=60){m1=+mm[1];i1=+mm[2]}
   if(!APP_LINK)return sendMsg(m.chat.id,'⚠️ APP_LINK is not set on the server.');
