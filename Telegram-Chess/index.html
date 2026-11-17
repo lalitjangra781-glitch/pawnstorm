@@ -142,7 +142,7 @@ const cap1=s=>s[0].toUpperCase()+s.slice(1);
 
 function home(){G=null;$('#game').hidden=true;$('#home').hidden=false;
  const av=U.photo_url?`<img class="av" src="${U.photo_url}">`:`<div class="av">${(U.first_name||'?')[0]}</div>`;
- $('#home').innerHTML=`<div class="prof">${av}<div><b>${uname}</b><div class="rt"><span>⚡ Bullet <b>${R.bullet}</b></span><span>🔥 Blitz <b>${R.blitz}</b></span><span>⏱ Rapid <b>${R.rapid}</b></span></div><div class="rt">vs Bot · W ${R.w} L ${R.l} D ${R.d}</div>${S?`<div class="rt">🌐 Online ⚡<b>${S.bullet}</b> 🔥<b>${S.blitz}</b> ⏱<b>${S.rapid}</b> · W ${S.w} L ${S.l} D ${S.d}</div>`:""}</div></div>
+ $('#home').innerHTML=`<div class="rt" style="margin-bottom:8px">${S?'🟢 Connected to server':'🟠 Connecting to server… (can take up to 1 min)'}</div><div class="prof">${av}<div><b>${uname}</b><div class="rt"><span>⚡ Bullet <b>${R.bullet}</b></span><span>🔥 Blitz <b>${R.blitz}</b></span><span>⏱ Rapid <b>${R.rapid}</b></span></div><div class="rt">vs Bot · W ${R.w} L ${R.l} D ${R.d}</div>${S?`<div class="rt">🌐 Online ⚡<b>${S.bullet}</b> 🔥<b>${S.blitz}</b> ⏱<b>${S.rapid}</b> · W ${S.w} L ${S.l} D ${S.d}</div>`:""}</div></div>
  <h3>Time control</h3>${TC.map(([n,l])=>`<div class="grid" style="margin-bottom:8px">${l.map(([m,i])=>`<button class="chip" data-m="${m}" data-i="${i}">${m}+${i}<small>${n}</small></button>`).join('')}</div>`).join('')}
  <div class="cust"><label>Minutes<input id="cm" type="number" min="1" max="180" value="${cfg.m}"></label><label>Increment (sec)<input id="ci" type="number" min="0" max="60" value="${cfg.i}"></label></div>
  <h3>Bot level</h3><div class="grid">${LV.map((l,k)=>`<button class="chip lv" data-k="${k}">${l.n}<small>~${l.r}</small></button>`).join('')}</div>
@@ -238,16 +238,16 @@ $('#hm').onclick=()=>{if(G&&G.online&&!G.over&&G.plies<2)send({t:'resign'});if(G
 
 /* ===== Online multiplayer ===== */
 const SERVER='';   /* e.g. 'wss://chess.example.com' if the server is on a different domain than this page */
-let ws=null,S=null,qT=null,wsq=[],BOT='',APPL='',curRoom=null,sp=tg&&tg.initDataUnsafe&&tg.initDataUnsafe.start_param;
+let ws=null,S=null,qT=null,wsq=[],BOT='',APPL='',curRoom=null,rj=0,sp=tg&&tg.initDataUnsafe&&tg.initDataUnsafe.start_param;
 const WSURL=SERVER||((location.protocol=='https:'?'wss://':'ws://')+location.host);
 function send(o){const s=JSON.stringify(o);if(ws&&ws.readyState==1)ws.send(s);else wsq.push(s)}
 function conn(){try{ws=new WebSocket(WSURL)}catch(e){return}
- ws.onopen=()=>{ws.send(JSON.stringify({t:'auth',initData:tg?tg.initData:'',name:uname}));if(sp){ws.send(JSON.stringify({t:'join',room:sp}));sp=null}wsq.splice(0).forEach(x=>ws.send(x))};
+ ws.onopen=()=>{ws.send(JSON.stringify({t:'auth',initData:tg?tg.initData:'',name:uname}));if(sp){curRoom=sp;sp=null}if(curRoom&&!(G&&G.online&&!G.over))ws.send(JSON.stringify({t:'join',room:curRoom,re:rj++}));wsq.splice(0).forEach(x=>ws.send(x))};
  ws.onmessage=e=>on(JSON.parse(e.data));ws.onclose=()=>setTimeout(conn,2000)}
 function invite(){const b=new Uint8Array(4);crypto.getRandomValues(b);
  curRoom='m'+cfg.m+'i'+cfg.i+'_'+[...b].map(x=>x.toString(16).padStart(2,'0')).join('');
  send({t:'join',room:curRoom});setTimeout(shareRoom,400)}
-function shareRoom(){if(!curRoom)return;const link=(APPL||(BOT?'https://t.me/'+BOT:''))+'?startapp='+curRoom,
+function shareRoom(){if(!curRoom)return;if(!APPL&&!BOT){alert('Server has no APP_LINK set. Add APP_LINK in Render settings.');return}const link=(APPL||(BOT?'https://t.me/'+BOT:''))+'?startapp='+curRoom,
  u='https://t.me/share/url?url='+encodeURIComponent(link)+'&text='+encodeURIComponent('♟ Chess challenge '+cfg.m+'+'+cfg.i+' - tap the link to play!');
  try{tg.openTelegramLink(u)}catch(e){try{navigator.clipboard.writeText(link)}catch(x){}prompt('Copy this link and send it to your friend / group:',link)}}
 function modal(h){$('#md').hidden=false;$('#md').innerHTML='<div>'+h+'</div>'}
@@ -257,7 +257,7 @@ function queue(){send({t:'queue',m:cfg.m,i:cfg.i});
  clearTimeout(qT);qT=setTimeout(()=>{const b=$('#qb');if(b){b.hidden=false;b.onclick=()=>{send({t:'cancel'});$('#md').hidden=true;newGame()}}},15000)}
 function on(m){
  if(m.t=='me'){S=m.r;BOT=m.bot;APPL=m.app;if(!G)home()}
- else if(m.t=='start'){clearTimeout(qT);startOnline(m)}
+ else if(m.t=='start'){clearTimeout(qT);curRoom=null;startOnline(m)}
  else if(m.t=='move'&&G&&G.online&&!G.over){const x=legal(G.pos).find(v=>v.f==m.f&&v.t==m.to&&(v.p||'')==(m.p||''));if(x){G.clk=m.clk;play(x,1)}}
  else if(m.t=='ack'&&G&&G.online){G.clk=m.clk;G.ts=performance.now()}
  else if(m.t=='waiting'){modal(`<h2>⏳ Waiting…</h2><div style="color:var(--mu)">${m.m}+${m.i} · Friendly game</div><div style="margin:14px 0;color:var(--mu)">Share this game in a chat. The first person to tap Play joins you.</div><div class="grid"><button class="chip" id="sh">👥 Share</button><button class="chip" id="wc">Cancel</button></div>`);
@@ -265,7 +265,7 @@ function on(m){
  else if(m.t=='over')overOnline(m)
  else if(m.t=='lb'){const f=(k,n)=>`<div style="text-align:left;margin-top:10px"><b>${n}</b>${m[k].map((x,i)=>`<div style="display:flex;justify-content:space-between;color:var(--mu)"><span>${i+1}. ${x.name}</span><b style="color:var(--tx)">${x.r}</b></div>`).join('')||'<div style="color:var(--mu)">No players yet</div>'}</div>`;
   modal(`<h2>🏆 Top players</h2>${f('bullet','⚡ Bullet')}${f('blitz','🔥 Blitz')}${f('rapid','⏱ Rapid')}<div class="grid"><button class="chip" id="cl">Close</button></div>`);$('#cl').onclick=()=>$('#md').hidden=true}
- else if(m.t=='err'){alert(m.msg)}}
+ else if(m.t=='err'){$('#md').hidden=true;alert(m.msg)}}
 function startOnline(m){$('#md').hidden=true;
  G={online:1,pos:start(),my:m.color,m:m.m,i:m.i*1000,clk:{w:m.clk.w,b:m.clk.b},last:null,over:false,pre:null,plies:0,san:[],reps:{},cat:m.cat,ts:performance.now()};sel=-1;
  for(const v of m.moves){const P=G.pos,x=legal(P).find(y=>y.f==v.f&&y.t==v.t&&(y.p||'')==(v.p||''));if(!x)break;const N=make(P,x);G.san.push(sanOf(P,x,N));G.pos=N;G.last=x;G.plies++}
@@ -279,7 +279,7 @@ function overOnline(m){if(!G||!G.online||G.over)return;G.over=true;S=m.r;G.clk=m
  const g=G;cfg.m=g.m;cfg.i=g.i/1000;
  setTimeout(()=>{if(G!==g)return;modal(`${body}<div class="grid"><button class="chip" id="rm">Find new game</button><button class="chip" id="hh">Home</button></div>`);
   $('#rm').onclick=()=>queue();$('#hh').onclick=()=>{$('#md').hidden=true;home()}},600)}
-home();conn();
+home();conn();if(sp)modal('<h2>♟ Joining game…</h2><div style="color:var(--mu);margin-top:8px">Connecting to server, this can take up to a minute</div>');
 </script>
 </body>
 </html>
